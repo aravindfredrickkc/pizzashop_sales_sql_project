@@ -1,0 +1,402 @@
+Database: pizzahut(sample)
+1. Trigger: update_pizza_price_on_size_change
+Description: This trigger automatically updates the price of a pizza when its size is changed. It sets the new price based on the minimum price for the new size within the same pizza type.
+DELIMITER //
+CREATE TRIGGER update_pizza_price_on_size_change
+BEFORE UPDATE ON pizzas
+FOR EACH ROW
+BEGIN
+    IF OLD.size <> NEW.size THEN
+        SET NEW.price = (
+            CASE
+                WHEN NEW.size = 'S' THEN
+                    (SELECT MIN(price) FROM pizzas WHERE size = 'S' AND pizza_type_id = NEW.pizza_type_id)
+                WHEN NEW.size = 'M' THEN
+                    (SELECT MIN(price) FROM pizzas WHERE size = 'M' AND pizza_type_id = NEW.pizza_type_id)
+                WHEN NEW.size = 'L' THEN
+                    (SELECT MIN(price) FROM pizzas WHERE size = 'L' AND pizza_type_id = NEW.pizza_type_id)
+                ELSE
+                    OLD.price
+            END
+        );
+    END IF;
+END //
+DELIMITER ;
+2. Function: avg_price_by_type
+Description: This function calculates the average price of pizzas based on their type.
+Code:
+DELIMITER //
+CREATE FUNCTION avg_price_by_type(pizza_type_id VARCHAR(50))
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+    DECLARE avg_price DECIMAL(10,2);
+    SELECT AVG(price) INTO avg_price
+    FROM pizzas
+    WHERE pizza_type_id = pizza_type_id;
+    RETURN avg_price;
+END //
+DELIMITER ;
+3. Query: Maximum Price by Size
+Description: This query retrieves the maximum price of pizzas grouped by size.
+Code:
+SELECT size, MAX(price) AS max_price
+FROM pizzas
+GROUP BY size;
+4. Trigger: prevent_delete_pizza_type
+Description: This trigger prevents the deletion of a pizza type if there are pizzas associated with it.
+Code:
+DELIMITER //
+CREATE TRIGGER prevent_delete_pizza_type
+BEFORE DELETE ON pizza_types
+FOR EACH ROW
+BEGIN
+    DECLARE pizza_count INT;
+    SELECT COUNT(*) INTO pizza_count
+    FROM pizzas
+    WHERE pizza_type_id = OLD.pizza_type_id;
+    IF pizza_count > 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'Cannot delete pizza type because pizzas are associated with it.';
+    END IF;
+END //
+DELIMITER ;
+Function: discounted_price
+Description: This function calculates the discounted price of a pizza based on a given discount percentage.
+DELIMITER //
+CREATE FUNCTION discounted_price(pizza_id VARCHAR(50), discount DECIMAL(5,2))
+RETURNS DECIMAL(10,2)
+DETERMINISTIC
+BEGIN
+    DECLARE original_price DECIMAL(10,2);
+    SELECT price INTO original_price
+    FROM pizzas
+    WHERE pizza_id = pizza_id;
+    RETURN original_price * (1 - discount / 100);
+END //
+DELIMITER ;
+6. Table: price_change_log
+Description: This table logs price changes for pizzas.
+Code:
+
+CREATE TABLE price_change_log (
+    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    pizza_id VARCHAR(50),
+    old_price DECIMAL(10,2),
+    new_price DECIMAL(10,2),
+    change_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+7. Trigger: log_price_change
+Description: This trigger logs the old and new prices of a pizza whenever the price is updated.
+Code:
+DELIMITER //
+CREATE TRIGGER log_price_change
+AFTER UPDATE ON pizzas
+FOR EACH ROW
+BEGIN
+    IF OLD.price <> NEW.price THEN
+        INSERT INTO price_change_log (pizza_id, old_price, new_price)
+        VALUES (OLD.pizza_id, OLD.price, NEW.price);
+    END IF;
+END //
+DELIMITER ;
+
+8.Query: Average Price by Type Example
+Description: This query demonstrates the use of the avg_price_by_type function to get the average price for a specific pizza type.
+Code:
+ SELECT avg_price_by_type('classic_dlx');
+
+9. Query: Show Triggers
+Description: This query lists all triggers in the database.
+Code:
+SHOW TRIGGERS;
+
+10. Query: Update Pizza Price
+Description: This query updates the price of a specific pizza.
+UPDATE pizzas SET price = price + 1 WHERE pizza_id = 'pepperoni_s';
+11. Query: Select from price_change_log
+Description: This query retrieves all entries from the price_change_log table.
+Code:
+SELECT * FROM price_change_log;
+
+12. Query: Update Pizza Size
+Description: This query updates the size of a specific pizza.
+UPDATE pizzas SET size = 'M' WHERE pizza_id = 'bbq_ckn_s';
+
+13. Query: Select Specific Pizza
+Description: This query retrieves details of a specific pizza after an update.
+Code:
+SELECT * FROM pizzas WHERE pizza_id = 'bbq_ckn_s';
+
+14. Query: Join pizzas and pizza_types
+Description: This query retrieves detailed information about pizzas by joining the pizzas and pizza_types tables.
+SELECT p.pizza_id, p.size, p.price, pt.name AS pizza_name, pt.ingredients
+FROM pizzas p
+JOIN pizza_types pt ON p.pizza_type_id = pt.pizza_type_id;
+
+SALES ANALYSIS USING SQL :
+
+-- Total number of orders
+select count(order_id) as total_orders from orders;
++--------------+
+| total_orders |
++--------------+
+|        21350 |
++--------------+
+
+-- Pizza with the highest price
+select pizza_types.name, pizzas.price 
+from pizza_types 
+join pizzas on pizza_types.pizza_type_id = pizzas.pizza_type_id 
+order by pizzas.price desc limit 1;
++-----------------+-------+
+| name            | price |
++-----------------+-------+
+| The Greek Pizza | 35.95 |
++-----------------+-------+
+
+-- Most common pizza quantity ordered
+select quantity , count(order_details_id)
+from order_details 
+group by quantity asc;
++----------+-------------------------+
+| quantity | count(order_details_id) |
++----------+-------------------------+
+|        1 |                   47693 |
+|        2 |                     903 |
+|        3 |                      21 |
+|        4 |                       3 |
++----------+-------------------------+
+
+-- Most ordered pizza size
+SELECT pizzas.size, COUNT(order_details.order_id) AS order_count
+FROM pizzas
+JOIN order_details ON pizzas.pizza_id = order_details.pizza_id
+GROUP BY pizzas.size
+LIMIT 1;
++------+-------------+
+| size | order_count |
++------+-------------+
+| L    |       18526 |
++------+-------------+
+
+-- Top 5 pizza types by quantity ordered
+select pizza_types.name , sum(order_details.quantity) as quantity 
+from pizza_types 
+join pizzas on pizza_types.pizza_type_id=pizzas.pizza_type_id 
+join order_details on order_details.pizza_id=pizzas.pizza_id  
+group by pizza_types.name 
+order by quantity desc limit 5;
++----------------------------+----------+
+| name                       | quantity |
++----------------------------+----------+
+| The Classic Deluxe Pizza   |     2453 |
+| The Barbecue Chicken Pizza |     2432 |
+| The Hawaiian Pizza         |     2422 |
+| The Pepperoni Pizza        |     2418 |
+| The Thai Chicken Pizza     |     2371 |
++----------------------------+----------+
+
+-- Quantity of orders by pizza category
+SELECT pizza_types.category, SUM(order_details.quantity) AS quantity
+FROM pizza_types
+JOIN pizzas ON pizza_types.pizza_type_id = pizzas.pizza_type_id
+JOIN order_details ON order_details.pizza_id = pizzas.pizza_id
+GROUP BY pizza_types.category
+ORDER BY quantity DESC;
++----------+----------+
+| category | quantity |
++----------+----------+
+| Classic  |    14888 |
+| Supreme  |    11987 |
+| Veggie   |    11649 |
+| Chicken  |    11050 |
++----------+----------+
+
+-- Order count by hour of the day
+SELECT HOUR(order_time) AS hour_of_day, COUNT(order_id) AS order_count
+FROM orders
+GROUP BY HOUR(order_time)
+ORDER BY hour_of_day DESC;
++-------------+-------------+
+| hour_of_day | order_count |
++-------------+-------------+
+|          23 |          28 |
+|          22 |         663 |
+|          21 |        1198 |
+|          20 |        1642 |
+|          19 |        2009 |
+|          18 |        2399 |
+|          17 |        2336 |
+|          16 |        1920 |
+|          15 |        1468 |
+|          14 |        1472 |
+|          13 |        2455 |
+|          12 |        2520 |
+|          11 |        1231 |
+|          10 |           8 |
+|           9 |           1 |
++-------------+-------------+
+
+-- Order count by pizza category
+SELECT pizza_types.category, COUNT(order_details.order_id) AS orders
+FROM pizza_types
+JOIN pizzas ON pizza_types.pizza_type_id = pizzas.pizza_type_id
+JOIN order_details ON order_details.pizza_id = pizzas.pizza_id
+GROUP BY pizza_types.category
+ORDER BY orders DESC;
++----------+--------+
+| category | orders |
++----------+--------+
+| Classic  |  14579 |
+| Supreme  |  11777 |
+| Veggie   |  11449 |
+| Chicken  |  10815 |
++----------+--------+
+
+-- Number of pizza types by category
+SELECT category, COUNT(pizza_types.pizza_type_id) AS count
+FROM pizza_types
+GROUP BY category
+ORDER BY count DESC;
++----------+-------+
+| category | count |
++----------+-------+
+| Supreme  |     9 |
+| Veggie   |     9 |
+| Classic  |     8 |
+| Chicken  |     6 |
++----------+-------+
+
+-- Average quantity of pizzas ordered per day
+SELECT ROUND(AVG(quantity), 0) AS average
+FROM (
+    SELECT orders.order_date, SUM(order_details.quantity) AS quantity
+    FROM orders
+    JOIN order_details ON orders.order_id = order_details.order_id
+    GROUP BY orders.order_date
+) AS ordered_quantity;
++---------+
+| average |
++---------+
+|     138 |
++---------+
+
+-- Top 5 pizza types by revenue
+SELECT pizza_types.name,
+       ROUND(SUM(order_details.quantity * pizzas.price), 0) AS revenue
+FROM pizza_types
+JOIN pizzas ON pizza_types.pizza_type_id = pizzas.pizza_type_id
+JOIN order_details ON order_details.pizza_id = pizzas.pizza_id
+GROUP BY pizza_types.name
+ORDER BY revenue DESC
+LIMIT 5;
++------------------------------+---------+
+| name                         | revenue |
++------------------------------+---------+
+| The Barbecue Chicken Pizza   |   44704 |
+| The Thai Chicken Pizza       |   43434 |
+| The California Chicken Pizza |   41410 |
+| The Classic Deluxe Pizza     |   38180 |
+| The Spicy Italian Pizza      |   34831 |
++------------------------------+---------+
+
+-- Revenue and percentage contribution by category
+WITH TotalRevenue AS (
+    SELECT ROUND(SUM(order_details.quantity * pizzas.price), 2) AS total_sales
+    FROM order_details
+    JOIN pizzas ON pizzas.pizza_id = order_details.pizza_id
+)
+SELECT pizza_types.category,
+       ROUND(SUM(order_details.quantity * pizzas.price), 2) AS revenue,
+       ROUND(
+           (SUM(order_details.quantity * pizzas.price) / TotalRevenue.total_sales) * 100,
+           2
+       ) AS percentage_contribution
+FROM pizza_types
+JOIN pizzas ON pizza_types.pizza_type_id = pizzas.pizza_type_id
+JOIN order_details ON order_details.pizza_id = pizzas.pizza_id
+CROSS JOIN TotalRevenue
+GROUP BY pizza_types.category, TotalRevenue.total_sales
+ORDER BY percentage_contribution DESC
+LIMIT 5;
++----------+-----------+-------------------------+
+| category | revenue   | percentage_contribution |
++----------+-----------+-------------------------+
+| Classic  | 220804.10 |                   26.91 |
+| Supreme  | 208197.00 |                   25.37 |
+| Chicken  | 197855.50 |                   24.11 |
+| Veggie   | 193690.45 |                   23.61 |
++----------+-----------+-------------------------+
+
+-- Cumulative revenue by date
+SELECT
+    order_date,
+    SUM(revenue) OVER (ORDER BY order_date) AS cum_revenue
+FROM (
+    SELECT
+        orders.order_date,
+        SUM(order_details.quantity * pizzas.price) AS revenue
+    FROM order_details
+    JOIN pizzas ON order_details.pizza_id = pizzas.pizza_id
+    JOIN orders ON orders.order_id = order_details.order_id
+    GROUP BY orders.order_date
+) AS sales;
++------------+--------------------+
+| order_date | cum_revenue        |
++------------+--------------------+
+| 2015-01-01 | 2718.8500000000004 |
+| 2015-01-02 |            5462.75 |
+| 2015-01-03 |            8131.15 |
+| 2015-01-04 |             9892.6 |
+| 2015-01-05 |           11961.55 |
+| 2015-01-06 |            14391.5 |
+| 2015-01-07 |            16611.7 |
+| 2015-01-08 |           19452.05 |
+| 2015-01-09 |            21588.4 |
+| 2015-01-10 | 24060.350000000002 |
+| 2015-01-11 |           25942.65 |
+| 2015-01-12 |            27873.7 |
+| 2015-01-13 | 29923.300000000003 |
+| 2015-01-14 | 32456.700000000004 |
+| 2015-01-15 |  34445.50000000001 |
+| 2015-01-16 |  37053.65000000001 |
+| 2015-01-17 |  39129.75000000001 |
+| 2015-01-18 | 41113.600000000006 |
+| 2015-01-19 |  43506.75000000001 |
+| 2015-01-20 |  45906.65000000001 |
+| 2015-01-21 |  47954.20000000001 |
+| 2015-01-22 |  50468.90000000001 |
+| 2015-01-23 | 52912.600000000006 |
+| 2015-01-24 | 55211.850000000006 |
+| 2015-01-25 | 57068.40000000001 |
+| 2015-01-26 |  59244.85000000001 |
+| 2015-01-27 |  61252.45000000001 |
+| 2015-01-28 |  63226.95000000001 |
+| 2015-01-29 | 65222.900000000016 |
+| 2015-01-30 |  67547.90000000001 |
+| 2015-01-31 | 69983.05000000002  |
++------------+--------------------+
+
+-- 5 days with the highest order quantities
+SELECT
+    orders.order_date,
+    SUM(order_details.quantity) AS order_quantity
+FROM order_details
+JOIN orders ON orders.order_id = order_details.order_id
+GROUP BY orders.order_date
+ORDER BY order_quantity DESC
+LIMIT 5;
++------------+----------------+
+| order_date | order_quantity |
++------------+----------------+
+| 2015-01-01 |            192 |
+| 2015-01-04 |            177 |
+| 2015-01-02 |            176 |
+| 2015-01-03 |            170 |
+| 2015-01-05 |            162 |
++------------+----------------+
+
+
+
